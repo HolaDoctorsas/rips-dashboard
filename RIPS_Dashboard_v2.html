@@ -782,7 +782,7 @@ function autenticarYLeer(){
         cache:{ cacheLocation:'localStorage', storeAuthStateInCookie:true }
       });
     }
-    var scopes=['https://graph.microsoft.com/Files.Read','User.Read'];
+    var scopes=['https://graph.microsoft.com/Files.Read','https://graph.microsoft.com/Files.ReadWrite','https://graph.microsoft.com/Sites.Read.All','User.Read'];
     var accounts=_msalApp.getAllAccounts();
     if(accounts.length>0){
       _msalApp.acquireTokenSilent({scopes:scopes,account:accounts[0]})
@@ -799,18 +799,35 @@ function loginPopup(scopes){
     .catch(function(e){ falloConexion('Login cancelado o fallido: '+e.message); });
 }
 
-// ── Graph API — leer Excel de OneDrive ───────────────────────
+// ── Graph API — leer Excel (OneDrive propio O SharePoint compartido) ─
 function leerExcelOneDrive(token){
-  setSyncState('loading','Leyendo Excel de OneDrive...');
+  setSyncState('loading','Leyendo Excel...');
   var h={'Authorization':'Bearer '+token};
-  // Ruta: GET /me/drive/root:/{filePath}:/workbook/worksheets/{sheet}/usedRange
-  var encodedPath=CONFIG.filePath.split('/').map(encodeURIComponent).join('/');
-  var url='https://graph.microsoft.com/v1.0/me/drive/root:/'+encodedPath+':/workbook/worksheets/'+encodeURIComponent(CONFIG.sheetName)+'/usedRange?$select=values';
+  var sheetEncoded=encodeURIComponent(CONFIG.sheetName);
+
+  // Si filePath es una URL de SharePoint (https://...) usar share API
+  if(CONFIG.filePath.startsWith('http')){
+    // Codificar la URL en base64url para la Graph Shares API
+    var shareUrl=CONFIG.filePath;
+    var b64=btoa(shareUrl).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    var shareToken='u!'+b64;
+    var url='https://graph.microsoft.com/v1.0/shares/'+shareToken+'/driveItem/workbook/worksheets/'+sheetEncoded+'/usedRange?$select=values';
+    fetchExcel(url, h, token);
+  } else {
+    // Ruta relativa en el OneDrive propio
+    var encodedPath=CONFIG.filePath.split('/').map(encodeURIComponent).join('/');
+    var url='https://graph.microsoft.com/v1.0/me/drive/root:/'+encodedPath+':/workbook/worksheets/'+sheetEncoded+'/usedRange?$select=values';
+    fetchExcel(url, h, token);
+  }
+}
+
+function fetchExcel(url, h, token){
   fetch(url,{headers:h})
     .then(function(r){
       if(r.status===401){ _accessToken=null; falloConexion('Sesión expirada. Haz clic en Actualizar para volver a iniciar sesión.'); return null; }
-      if(r.status===404){ falloConexion('Archivo no encontrado: "'+CONFIG.filePath+'". Verifica la ruta exacta en OneDrive (ej: Documentos/RIPS.xlsx)'); return null; }
-      if(!r.ok){ return r.text().then(function(t){ falloConexion('Error '+r.status+': '+t.substring(0,200)); return null; }); }
+      if(r.status===404){ falloConexion('Archivo no encontrado. Verifica la ruta o el enlace de SharePoint.'); return null; }
+      if(r.status===403){ falloConexion('Sin permisos para leer este archivo. Asegúrate de tener acceso al archivo en OneDrive/SharePoint.'); return null; }
+      if(!r.ok){ return r.text().then(function(t){ falloConexion('Error '+r.status+': '+t.substring(0,300)); return null; }); }
       return r.json();
     })
     .then(function(data){
