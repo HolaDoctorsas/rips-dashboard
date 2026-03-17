@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RIPS | Productividad Médica</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"
+  onerror="window._papaFailed=true"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"
+  onerror="window._xlsxFailed=true"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.0/lib/msal-browser.min.js"
+  onerror="window._msalFailed=true"></script>
+<script>
+// Parser CSV de respaldo por si PapaParse no carga (sin conexión / CDN bloqueado)
+function _ensurePapa(){
+  if(typeof Papa!=='undefined') return;
+  window.Papa={
+    parse:function(csv,opts){
+      opts=opts||{};
+      var tr=opts.transformHeader||function(x){return x;};
+      var dyn=opts.dynamicTyping||false;
+      var lines=csv.replace(/\r\n/g,'\n').replace(/\r/g,'\n').trim().split('\n');
+      if(!lines.length) return {data:[],errors:[]};
+      // simple split respecting quoted commas
+      function splitLine(line){
+        var res=[],cur='',inQ=false;
+        for(var i=0;i<line.length;i++){
+          var c=line[i];
+          if(c==='"'){inQ=!inQ;}
+          else if(c===','&&!inQ){res.push(cur.trim());cur='';}
+          else{cur+=c;}
+        }
+        res.push(cur.trim());
+        return res;
+      }
+      var headers=splitLine(lines[0]).map(function(h){return tr(h.replace(/^"|"$/g,''));});
+      var data=[];
+      for(var i=1;i<lines.length;i++){
+        if(!lines[i].trim()) continue;
+        var vals=splitLine(lines[i]);
+        var row={};
+        headers.forEach(function(h,j){
+          var v=(vals[j]||'').replace(/^"|"$/g,'');
+          if(dyn&&v!==''&&!isNaN(v)) row[h]=parseFloat(v);
+          else row[h]=v;
+        });
+        data.push(row);
+      }
+      return {data:data,errors:[]};
+    }
+  };
+}
+</script>
+<style>
+/* ===== RESET & TOKENS ===== */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --ink:#0D1117;--ink2:#24292F;--ink3:#57606A;--ink4:#8C959F;
+  --surface:#F6F8FA;--surface2:#EAEEF2;--border:#D0D7DE;
+  --white:#FFFFFF;
+  --blue:#0969DA;--blue-bg:#DDF4FF;--blue-border:#54AEFF;
+  --green:#1A7F37;--green-bg:#DAFBE1;--green-border:#4AC26B;
+  --red:#CF222E;--red-bg:#FFEBE9;--red-border:#FF8182;
+  --amber:#9A6700;--amber-bg:#FFF8C5;--amber-border:#D4A72C;
+  --purple:#6639BA;--purple-bg:#FBEFFF;--purple-border:#C297FF;
+  --shadow-xs:0 1px 0 rgba(31,35,40,.04);
+  --shadow-sm:0 1px 3px rgba(31,35,40,.06),0 1px 2px rgba(31,35,40,.04);
+  --shadow:0 3px 12px rgba(31,35,40,.08),0 1px 3px rgba(31,35,40,.06);
+  --shadow-lg:0 8px 32px rgba(31,35,40,.12),0 3px 8px rgba(31,35,40,.06);
+  --radius:12px;--radius-sm:8px;--radius-xs:6px;
+}
+body{font-family:'DM Sans',sans-serif;background:var(--surface);color:var(--ink);min-height:100vh;font-size:14px}
+h1,h2,h3,h4{font-family:'Syne',sans-serif}
+
+/* ===== TOPBAR ===== */
+.topbar{
+  background:var(--ink);color:var(--white);
+  height:56px;padding:0 32px;
+  display:flex;align-items:center;justify-content:space-between;
+  position:sticky;top:0;z-index:200;
+  border-bottom:1px solid rgba(255,255,255,.08);
+}
+.topbar-brand{display:flex;align-items:center;gap:12px}
+.brand-mark{
+  width:30px;height:30px;background:var(--blue);border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:'DM Mono';font-size:11px;font-weight:500;color:#fff;letter-spacing:.5px
+}
+.brand-name{font-family:'Syne';font-size:15px;font-weight:700;letter-spacing:-.3px}
+.brand-sep{width:1px;height:18px;background:rgba(255,255,255,.15)}
+.brand-sub{font-size:12px;color:#8B949E;font-weight:400}
+
+.topbar-right{display:flex;align-items:center;gap:10px}
+.sync-status{display:flex;align-items:center;gap:6px;font-size:12px;color:#8B949E;font-family:'DM Mono'}
+.sync-dot{width:7px;height:7px;border-radius:50%;background:#3FB950;box-shadow:0 0 6px #3FB950;animation:pulse 2s infinite}
+.sync-dot.loading{background:#D4A72C;box-shadow:0 0 6px #D4A72C;animation:spin-dot 1s linear infinite}
+.sync-dot.error{background:#F85149;box-shadow:0 0 6px #F85149;animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes spin-dot{0%{opacity:1}50%{opacity:.2}100%{opacity:1}}
+
+.btn-refresh{
+  display:flex;align-items:center;gap:6px;
+  padding:6px 14px;background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.12);color:var(--white);
+  border-radius:var(--radius-xs);font-size:12px;font-weight:500;
+  cursor:pointer;transition:all .2s;font-family:'DM Sans'
+}
+.btn-refresh:hover{background:rgba(255,255,255,.14)}
+.btn-refresh svg{transition:transform .4s}
+.btn-refresh.spinning svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ===== CONFIG BANNER ===== */
+.config-banner{
+  background:var(--amber-bg);border-bottom:1px solid var(--amber-border);
+  padding:10px 32px;display:flex;align-items:center;gap:12px;font-size:13px;color:var(--amber);
+}
+.config-banner.hidden{display:none}
+.config-banner strong{font-weight:600}
+.config-banner a{color:var(--blue);text-decoration:underline;cursor:pointer}
+
+/* ===== SETUP MODAL ===== */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;
+  display:flex;align-items:center;justify-content:center;
+  animation:fadeIn .2s ease
+}
+.modal-overlay.hidden{display:none}
+.modal{
+  background:var(--white);border-radius:var(--radius);
+  padding:32px;width:560px;max-width:90vw;
+  box-shadow:var(--shadow-lg);
+  animation:slideUp .25s ease
+}
+@keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.modal h2{font-size:20px;font-weight:700;color:var(--ink);margin-bottom:6px}
+.modal p{font-size:13px;color:var(--ink3);margin-bottom:24px;line-height:1.6}
+.modal-field{margin-bottom:16px}
+.modal-field label{display:block;font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.modal-field input{
+  width:100%;padding:10px 14px;border:1.5px solid var(--border);
+  border-radius:var(--radius-xs);font-size:13px;font-family:'DM Mono';
+  color:var(--ink);outline:none;transition:border .2s;background:var(--surface)
+}
+.modal-field input:focus{border-color:var(--blue);background:var(--white);box-shadow:0 0 0 3px rgba(9,105,218,.1)}
+.modal-field input::placeholder{color:var(--ink4);font-family:'DM Sans'}
+.modal-hint{font-size:11px;color:var(--ink4);margin-top:5px;line-height:1.5}
+.modal-hint code{background:var(--surface2);padding:1px 5px;border-radius:3px;font-family:'DM Mono';font-size:10px}
+.modal-actions{display:flex;gap:10px;margin-top:24px}
+.btn-primary{flex:1;padding:11px;background:var(--blue);color:var(--white);border:none;border-radius:var(--radius-xs);font-size:14px;font-weight:600;cursor:pointer;font-family:'DM Sans';transition:background .2s}
+.btn-primary:hover{background:#0860CA}
+.btn-secondary{padding:11px 20px;background:var(--surface);color:var(--ink2);border:1.5px solid var(--border);border-radius:var(--radius-xs);font-size:14px;cursor:pointer;font-family:'DM Sans';transition:all .2s}
+.btn-secondary:hover{border-color:var(--ink3)}
+.modal-steps{background:var(--surface);border-radius:var(--radius-sm);padding:16px;margin-bottom:20px}
+.modal-steps h4{font-size:12px;font-weight:700;color:var(--ink2);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px}
+.step{display:flex;gap:10px;margin-bottom:8px;font-size:12px;color:var(--ink3);line-height:1.5}
+.step-n{width:18px;height:18px;background:var(--blue);color:white;border-radius:50%;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+.step code{background:var(--surface2);padding:1px 5px;border-radius:3px;font-family:'DM Mono';font-size:10px;color:var(--ink)}
+
+/* ===== MAIN ===== */
+.main{max-width:1600px;margin:0 auto;padding:24px 32px 48px}
+
+/* ===== FILTERS ===== */
+.filters-bar{
+  background:var(--white);border-radius:var(--radius);
+  padding:16px 20px;margin-bottom:20px;
+  box-shadow:var(--shadow-xs);border:1px solid var(--border);
+  display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap
+}
+.filter-group{display:flex;flex-direction:column;gap:5px;min-width:150px;flex:1}
+.filter-group label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;color:var(--ink4)}
+.filter-group select{
+  padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-xs);
+  font-size:13px;font-family:'DM Sans';color:var(--ink);background:var(--white);
+  transition:border .2s;outline:none;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238C959F' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 10px center
+}
+.filter-group select:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(9,105,218,.1)}
+.filter-group input{
+  padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-xs);
+  font-size:13px;font-family:'DM Sans';color:var(--ink);outline:none;transition:border .2s
+}
+.filter-group input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(9,105,218,.1)}
+.btn-apply{padding:8px 18px;background:var(--blue);color:white;border:none;border-radius:var(--radius-xs);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;font-family:'DM Sans';transition:background .2s}
+.btn-apply:hover{background:#0860CA}
+.btn-clear{padding:8px 14px;background:transparent;color:var(--ink3);border:1.5px solid var(--border);border-radius:var(--radius-xs);font-size:13px;cursor:pointer;white-space:nowrap;font-family:'DM Sans';transition:all .2s}
+.btn-clear:hover{border-color:var(--ink3);color:var(--ink)}
+
+/* ===== ALERT CHIPS ===== */
+.alerts-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px}
+.chip{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:6px 12px;border-radius:20px;font-size:12px;font-weight:500;
+  border:1px solid;animation:chipIn .3s ease backwards
+}
+.chip.red{background:var(--red-bg);color:var(--red);border-color:var(--red-border)}
+.chip.green{background:var(--green-bg);color:var(--green);border-color:var(--green-border)}
+.chip.amber{background:var(--amber-bg);color:var(--amber);border-color:var(--amber-border)}
+.chip.blue{background:var(--blue-bg);color:var(--blue);border-color:var(--blue-border)}
+.chip-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+@keyframes chipIn{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}
+
+/* ===== KPI ROW ===== */
+.kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:20px}
+.kpi-card{
+  background:var(--white);border-radius:var(--radius);
+  padding:20px 20px 18px;border:1px solid var(--border);
+  box-shadow:var(--shadow-xs);transition:all .2s;
+  position:relative;overflow:hidden
+}
+.kpi-card:hover{box-shadow:var(--shadow);transform:translateY(-1px)}
+.kpi-card::before{content:'';position:absolute;inset:0 0 auto 0;height:3px}
+.kpi-card.c-blue::before{background:var(--blue)}
+.kpi-card.c-green::before{background:var(--green)}
+.kpi-card.c-red::before{background:var(--red)}
+.kpi-card.c-amber::before{background:#D4A72C}
+.kpi-card.c-purple::before{background:var(--purple)}
+.kpi-icon{font-size:20px;margin-bottom:12px;display:block}
+.kpi-val{font-family:'DM Mono';font-size:26px;font-weight:500;color:var(--ink);line-height:1;letter-spacing:-1px}
+.kpi-label{font-size:12px;color:var(--ink4);margin-top:5px;font-weight:500}
+.kpi-meta{font-size:11px;color:var(--ink4);margin-top:3px;opacity:.8}
+
+/* ===== 2-COL CHARTS ===== */
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:14px}
+
+.card{
+  background:var(--white);border-radius:var(--radius);
+  padding:20px 22px;border:1px solid var(--border);box-shadow:var(--shadow-xs)
+}
+.card-title{
+  font-family:'Syne';font-size:12px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.8px;
+  color:var(--ink3);margin-bottom:16px;
+  display:flex;align-items:center;justify-content:space-between
+}
+.card-title span{display:flex;align-items:center;gap:8px}
+.ct-accent{width:8px;height:8px;border-radius:2px;background:var(--blue);display:inline-block}
+.chart-wrap{position:relative}
+.chart-wrap canvas{max-height:280px}
+
+/* ===== RANKING LISTS ===== */
+.rank-list{display:flex;flex-direction:column;gap:6px}
+.rank-row{
+  display:flex;align-items:center;gap:10px;
+  padding:9px 10px;border-radius:var(--radius-xs);
+  transition:background .15s;cursor:default
+}
+.rank-row:hover{background:var(--surface)}
+.rank-n{
+  font-family:'DM Mono';font-size:11px;font-weight:500;
+  color:var(--ink4);width:20px;text-align:center;flex-shrink:0
+}
+.rank-n.g1{color:#B08800;font-weight:700}
+.rank-n.g2{color:#57606A;font-weight:700}
+.rank-n.g3{color:#953800;font-weight:700}
+.rank-name{flex:1;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rank-bar-bg{flex:0 0 80px;height:6px;background:var(--surface2);border-radius:3px;overflow:hidden}
+.rank-bar-fill{height:100%;border-radius:3px;transition:width .6s ease}
+.rank-val{font-family:'DM Mono';font-size:12px;font-weight:500;color:var(--ink2);flex-shrink:0;min-width:36px;text-align:right}
+.rank-badge{padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;flex-shrink:0}
+.rank-badge.ok{background:var(--green-bg);color:var(--green)}
+.rank-badge.no{background:var(--red-bg);color:var(--red)}
+
+/* ===== DATA TABLE ===== */
+.table-card{
+  background:var(--white);border-radius:var(--radius);
+  border:1px solid var(--border);box-shadow:var(--shadow-xs);overflow:hidden
+}
+.table-top{
+  padding:16px 20px;display:flex;justify-content:space-between;align-items:center;
+  border-bottom:1px solid var(--border);background:var(--surface)
+}
+.table-top-left{display:flex;align-items:center;gap:10px}
+.table-top-left h3{font-family:'Syne';font-size:13px;font-weight:700;color:var(--ink2);text-transform:uppercase;letter-spacing:.5px}
+.tbl-count{background:var(--blue);color:white;font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px;font-family:'DM Mono'}
+.table-top-right{display:flex;gap:8px;align-items:center}
+.tbl-search{
+  padding:7px 12px 7px 32px;border:1.5px solid var(--border);border-radius:var(--radius-xs);
+  font-size:13px;outline:none;width:220px;transition:border .2s;font-family:'DM Sans';
+  background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%238C959F' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='M21 21l-4.35-4.35'/%3E%3C/svg%3E") no-repeat 10px center
+}
+.tbl-search:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(9,105,218,.1)}
+.btn-export{
+  display:flex;align-items:center;gap:6px;padding:7px 14px;
+  background:var(--green-bg);color:var(--green);border:1px solid var(--green-border);
+  border-radius:var(--radius-xs);font-size:12px;font-weight:600;cursor:pointer;
+  font-family:'DM Sans';transition:all .2s
+}
+.btn-export:hover{background:var(--green);color:white}
+
+.tbl-wrap{overflow-x:auto;max-height:520px;overflow-y:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead{position:sticky;top:0;z-index:10}
+thead th{
+  background:var(--surface);padding:10px 14px;text-align:left;
+  font-family:'DM Sans';font-size:10px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.7px;color:var(--ink4);
+  border-bottom:1px solid var(--border);white-space:nowrap;
+  cursor:pointer;user-select:none;transition:color .15s
+}
+thead th:hover{color:var(--blue)}
+thead th.sort-asc::after{content:' ▲';font-size:8px}
+thead th.sort-desc::after{content:' ▼';font-size:8px}
+tbody tr{transition:background .1s}
+tbody tr:hover{background:var(--surface)}
+tbody tr:nth-child(even){background:#FAFBFC}
+tbody tr:nth-child(even):hover{background:var(--surface)}
+tbody td{padding:10px 14px;border-bottom:1px solid var(--surface2);white-space:nowrap;color:var(--ink2)}
+.td-doctor{font-weight:600;color:var(--ink);max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.td-right{text-align:right;font-family:'DM Mono';font-size:12px}
+.badge{padding:3px 9px;border-radius:10px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:4px}
+.badge.ok{background:var(--green-bg);color:var(--green)}
+.badge.no{background:var(--red-bg);color:var(--red)}
+.badge.warn{background:var(--amber-bg);color:var(--amber)}
+.pph-wrap{display:inline-flex;align-items:center;gap:8px}
+.pph-bar{width:60px;height:5px;background:var(--surface2);border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle}
+.pph-fill{height:100%;border-radius:3px}
+.pills{display:flex;gap:4px;flex-wrap:wrap}
+.pill{padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap}
+.pill.s1{background:var(--blue-bg);color:var(--blue)}
+.pill.s2{background:var(--green-bg);color:var(--green)}
+.pill.s3{background:var(--amber-bg);color:var(--amber)}
+.pill.s4{background:var(--purple-bg);color:var(--purple)}
+.tbl-summary td{font-weight:700;color:var(--blue);background:#EFF6FF !important;border-top:2px solid var(--blue)}
+
+/* ===== EMPTY / LOADING STATE ===== */
+.empty-state{
+  text-align:center;padding:60px 20px;color:var(--ink4)
+}
+.empty-state .empty-icon{font-size:48px;margin-bottom:12px;opacity:.5}
+.empty-state p{font-size:14px}
+.skeleton{
+  background:linear-gradient(90deg,var(--surface2) 25%,var(--border) 50%,var(--surface2) 75%);
+  background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px
+}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* ===== FOOTER ===== */
+.footer{text-align:center;padding:20px;color:var(--ink4);font-size:11px;border-top:1px solid var(--border);margin-top:24px}
+.footer a{color:var(--blue);text-decoration:none}
+
+/* ===== RESPONSIVE ===== */
+@media(max-width:1200px){.kpi-row{grid-template-columns:repeat(3,1fr)}.row2,.row3{grid-template-columns:1fr}}
+@media(max-width:768px){.kpi-row{grid-template-columns:repeat(2,1fr)}.main{padding:16px}.topbar{padding:0 16px}.filters-bar{flex-direction:column}}
+
+/* ===== PRINT ===== */
+@media print{.topbar,.config-banner,.filters-bar,.table-top-right,.btn-refresh{display:none!important}.kpi-card,.card,.table-card{box-shadow:none;border:1px solid #ddd}.tbl-wrap{max-height:none;overflow:visible}}
+</style>
+</head>
+<body>
+
+<!-- CONFIG MODAL -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal" style="width:640px;max-width:96vw">
+
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+      <div style="width:36px;height:36px;background:#0078D4;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">☁️</div>
+      <div>
+        <h2 style="margin:0;font-size:18px">Conectar con OneDrive for Business</h2>
+        <p style="margin:0;font-size:12px;color:var(--ink4)">Microsoft Graph API · Actualización automática</p>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div style="display:flex;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;margin:16px 0">
+      <button id="tab1" onclick="switchTab(1)"
+        style="flex:1;padding:9px 8px;border:none;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans';background:#0078D4;color:white;transition:all .2s">
+        ☁️ OneDrive automático
+      </button>
+      <button id="tab2" onclick="switchTab(2)"
+        style="flex:1;padding:9px 8px;border:none;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans';background:var(--surface);color:var(--ink3);transition:all .2s;border-left:1px solid var(--border)">
+        📂 Subir archivo manual
+      </button>
+      <button id="tab3" onclick="switchTab(3)"
+        style="flex:1;padding:9px 8px;border:none;font-size:12px;font-weight:600;cursor:pointer;font-family:'DM Sans';background:var(--surface);color:var(--ink3);transition:all .2s;border-left:1px solid var(--border)">
+        🖥️ Cómo ejecutar
+      </button>
+    </div>
+
+    <!-- TAB 1: MICROSOFT GRAPH / ONEDRIVE FOR BUSINESS -->
+    <div id="tabContent1">
+      <div style="padding:10px 14px;background:var(--blue-bg);border:1px solid var(--blue-border);border-radius:var(--radius-xs);font-size:12px;color:var(--blue);margin-bottom:14px;line-height:1.6">
+        🔐 <b>Cómo funciona:</b> el dashboard inicia sesión con tu cuenta Microsoft, lee el Excel de OneDrive directamente y se actualiza automáticamente cada vez que abres la página. Necesitas registrar una App en Azure AD <b>una sola vez</b>.
+      </div>
+
+      <div class="modal-field">
+        <label>Application (Client) ID <span style="color:var(--red)">*</span></label>
+        <input type="text" id="inputClientId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+        <div class="modal-hint">Azure Portal → App registrations → tu app → Application (client) ID</div>
+      </div>
+      <div class="modal-field">
+        <label>Directory (Tenant) ID <span style="color:var(--red)">*</span></label>
+        <input type="text" id="inputTenantId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+        <div class="modal-hint">Azure Portal → App registrations → tu app → Directory (tenant) ID</div>
+      </div>
+      <div class="modal-field">
+        <label>Ruta del archivo en OneDrive <span style="color:var(--red)">*</span></label>
+        <input type="text" id="inputFilePath" placeholder="RIPS/productividad_medica.xlsx">
+        <div class="modal-hint">Ruta relativa desde la raíz de tu OneDrive. Ej: <code>Documentos/RIPS_2024.xlsx</code></div>
+      </div>
+      <div class="modal-field">
+        <label>Nombre de la hoja (pestaña)</label>
+        <input type="text" id="inputSheetName" placeholder="Hoja1" value="Hoja1">
+        <div class="modal-hint">Nombre exacto de la pestaña con los datos RIPS.</div>
+      </div>
+
+      <!-- Pasos Azure AD -->
+      <details style="margin-top:4px">
+        <summary style="cursor:pointer;font-size:12px;font-weight:600;color:var(--blue);padding:8px 0;user-select:none">
+          📋 Guía rápida: cómo registrar la App en Azure (clic para expandir)
+        </summary>
+        <div style="background:var(--surface);border-radius:var(--radius-xs);padding:12px;margin-top:8px;font-size:11px;color:var(--ink3);line-height:1.8">
+          <b>1.</b> Ve a <a href="https://portal.azure.com" target="_blank" style="color:var(--blue)">portal.azure.com</a> → <b>Microsoft Entra ID</b> → <b>App registrations</b> → <b>New registration</b><br>
+          <b>2.</b> Nombre: <code>RIPS Dashboard</code> · Supported account types: <b>Single tenant</b><br>
+          <b>3.</b> Redirect URI: <b>Single-page application (SPA)</b> → escribe <code>http://localhost</code> (o la URL donde alojes el HTML)<br>
+          <b>4.</b> Clic en <b>Register</b>. Copia el <b>Application ID</b> y el <b>Tenant ID</b> en los campos de arriba.<br>
+          <b>5.</b> Ve a <b>API permissions</b> → <b>Add a permission</b> → <b>Microsoft Graph</b> → <b>Delegated</b> → agrega: <code>Files.Read</code> y <code>User.Read</code><br>
+          <b>6.</b> Clic en <b>Grant admin consent</b> (necesitas ser admin del tenant, o pedírselo a TI).
+        </div>
+      </details>
+
+      <div class="modal-actions" style="margin-top:14px">
+        <button class="btn-primary" onclick="guardarConfigGraph()" style="background:#0078D4">
+          ☁️ Guardar y conectar con OneDrive
+        </button>
+      </div>
+    </div>
+
+    <!-- TAB 2: DRAG & DROP -->
+    <div id="tabContent2" style="display:none">
+      <div id="dropZone"
+        style="border:2px dashed var(--border);border-radius:var(--radius-sm);padding:28px 20px;text-align:center;cursor:pointer;transition:all .2s;background:var(--surface)"
+        onclick="document.getElementById('fileInput').click()"
+        ondragover="event.preventDefault();document.getElementById('dropZone').style.borderColor='var(--blue)';document.getElementById('dropZone').style.background='var(--blue-bg)'"
+        ondragleave="document.getElementById('dropZone').style.borderColor='var(--border)';document.getElementById('dropZone').style.background='var(--surface)'"
+        ondrop="handleFileDrop(event)">
+        <div style="font-size:32px;margin-bottom:8px">📊</div>
+        <div style="font-weight:600;font-size:14px;color:var(--ink);margin-bottom:4px">Arrastra tu archivo Excel o CSV aquí</div>
+        <div style="font-size:12px;color:var(--ink4);margin-bottom:12px">Acepta .xlsx · .xls · .csv</div>
+        <div style="display:inline-block;padding:8px 20px;background:var(--blue);color:white;border-radius:var(--radius-xs);font-size:13px;font-weight:600;pointer-events:none">Seleccionar archivo</div>
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleFileSelect(event)">
+      </div>
+      <div id="fileStatus" style="display:none;margin-top:10px;padding:10px 14px;border-radius:var(--radius-xs);font-size:13px;font-weight:500"></div>
+    </div>
+
+    <!-- TAB 3: CÓMO EJECUTAR CORRECTAMENTE -->
+    <div id="tabContent3" style="display:none">
+      <div style="padding:12px 14px;background:var(--red-bg);border:1px solid var(--red-border);border-radius:var(--radius-xs);font-size:12px;color:var(--red);margin-bottom:14px">
+        ⚠️ <b>El problema:</b> Abriste el archivo con doble clic (<code>file://</code>). Chrome y Edge bloquean las conexiones a internet desde archivos locales, por eso MSAL no puede cargar.
+      </div>
+
+      <div style="font-size:13px;font-weight:600;color:var(--ink);margin-bottom:10px">✅ Solución: 3 opciones (elige la más fácil)</div>
+
+      <div style="display:flex;flex-direction:column;gap:10px">
+
+        <div style="padding:12px 14px;background:var(--green-bg);border:1px solid var(--green-border);border-radius:var(--radius-xs)">
+          <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:6px">🥇 Opción 1 — Python (más fácil, 1 comando)</div>
+          <div style="font-size:11px;color:var(--ink3);margin-bottom:6px">Abre una terminal en la carpeta del archivo y ejecuta:</div>
+          <code style="display:block;background:var(--surface);padding:8px 10px;border-radius:4px;font-size:11px;color:var(--ink)">python -m http.server 8080</code>
+          <div style="font-size:11px;color:var(--ink3);margin-top:6px">Luego abre en Chrome: <code style="background:var(--surface);padding:1px 5px;border-radius:3px">http://localhost:8080/RIPS_Dashboard_v2.html</code></div>
+        </div>
+
+        <div style="padding:12px 14px;background:var(--blue-bg);border:1px solid var(--blue-border);border-radius:var(--radius-xs)">
+          <div style="font-size:12px;font-weight:700;color:var(--blue);margin-bottom:6px">🥈 Opción 2 — Node.js</div>
+          <code style="display:block;background:var(--surface);padding:8px 10px;border-radius:4px;font-size:11px;color:var(--ink)">npx serve .</code>
+          <div style="font-size:11px;color:var(--ink3);margin-top:6px">Abre la URL que aparezca en la terminal + <code style="background:var(--surface);padding:1px 5px;border-radius:3px">/RIPS_Dashboard_v2.html</code></div>
+        </div>
+
+        <div style="padding:12px 14px;background:var(--amber-bg);border:1px solid var(--amber-border);border-radius:var(--radius-xs)">
+          <div style="font-size:12px;font-weight:700;color:var(--amber);margin-bottom:6px">🥉 Opción 3 — VS Code Live Server</div>
+          <div style="font-size:11px;color:var(--ink3)">Instala la extensión <b>Live Server</b> en VS Code → clic derecho en el archivo HTML → <b>Open with Live Server</b></div>
+        </div>
+
+      </div>
+
+      <div style="margin-top:12px;padding:10px 14px;background:var(--surface);border-radius:var(--radius-xs);font-size:11px;color:var(--ink4)">
+        💡 También debes agregar la URL del servidor en Azure AD → Autenticación → URIs de redirección SPA.<br>
+        Ejemplo: <code>http://localhost:8080</code>
+      </div>
+    </div>
+
+    <!-- META + DEMO -->
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;align-items:flex-end;gap:14px">
+      <div style="flex:0 0 160px">
+        <label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--ink4);margin-bottom:5px">Meta pac/hora</label>
+        <input type="number" id="inputMeta" value="3" min="1" max="20"
+          style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-xs);font-size:14px;font-family:'DM Mono';outline:none;color:var(--ink)">
+      </div>
+      <button class="btn-secondary" onclick="usarDatosDemo()" style="white-space:nowrap;margin-bottom:1px">Ver datos demo</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="topbar-brand">
+    <div class="brand-mark">H+</div>
+    <div>
+      <div class="brand-name">Productividad Médica</div>
+      <div class="brand-sub">RIPS Dashboard</div>
+    </div>
+    <div class="brand-sep"></div>
+    <div class="brand-sub" id="topbarPeriodo">—</div>
+  </div>
+  <div class="topbar-right">
+    <div class="sync-status">
+      <div class="sync-dot" id="syncDot"></div>
+      <span id="syncLabel">Sin datos</span>
+    </div>
+    <button class="btn-refresh" id="btnRefresh" onclick="cargarDatos()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      Actualizar
+    </button>
+    <button class="btn-refresh" onclick="abrirConfig()" style="gap:5px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M12 2v2M12 20v2M2 12h2M20 12h2M19.07 19.07l-1.41-1.41M4.93 19.07l1.41-1.41"/></svg>
+      Configurar
+    </button>
+  </div>
+</div>
+
+<!-- CONFIG WARNING -->
+<div class="config-banner" id="configBanner">
+  ⚠️ <span><strong>Modo demostración.</strong> Conecta tu Excel de SharePoint para ver datos reales. <a onclick="abrirConfig()">Configurar conexión Azure AD →</a></span>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- FILTERS -->
+  <div class="filters-bar">
+    <div class="filter-group" style="flex:0 0 auto;min-width:150px">
+      <label>Fecha</label>
+      <select id="fFecha"><option value="">Todas</option></select>
+    </div>
+    <div class="filter-group" style="flex:2;min-width:240px">
+      <label>Médico</label>
+      <select id="fMedico"><option value="">Todos</option></select>
+    </div>
+    <div class="filter-group" style="flex:2;min-width:260px">
+      <label>Tipo Prestación (SURACUP)</label>
+      <select id="fSuracup"><option value="">Todas</option></select>
+    </div>
+    <div class="filter-group" style="flex:0 0 auto;min-width:160px">
+      <label>Cumplimiento</label>
+      <select id="fMeta">
+        <option value="">Todos</option>
+        <option value="si">✅ Cumple meta</option>
+        <option value="no">❌ No cumple</option>
+      </select>
+    </div>
+    <button class="btn-apply" onclick="aplicarFiltros()">Filtrar</button>
+    <button class="btn-clear" onclick="limpiarFiltros()">Limpiar</button>
+  </div>
+
+  <!-- ALERTS -->
+  <div class="alerts-row" id="alertsRow"></div>
+
+  <!-- KPIs -->
+  <div class="kpi-row">
+    <div class="kpi-card c-blue">
+      <span class="kpi-icon">📊</span>
+      <div class="kpi-val" id="kpiTotal">—</div>
+      <div class="kpi-label">Total Consultas</div>
+      <div class="kpi-meta" id="kpiTotalMeta"></div>
+    </div>
+    <div class="kpi-card c-blue">
+      <span class="kpi-icon">👨‍⚕️</span>
+      <div class="kpi-val" id="kpiMedicos">—</div>
+      <div class="kpi-label">Médicos Activos</div>
+      <div class="kpi-meta" id="kpiMedicosMeta"></div>
+    </div>
+    <div class="kpi-card c-green" id="kpiPPHCard">
+      <span class="kpi-icon">⏱️</span>
+      <div class="kpi-val" id="kpiPPH">—</div>
+      <div class="kpi-label">Promedio Pac/Hora</div>
+      <div class="kpi-meta" id="kpiMetaLabel">Meta: — pac/hora</div>
+    </div>
+    <div class="kpi-card c-green">
+      <span class="kpi-icon">✅</span>
+      <div class="kpi-val" id="kpiCumple">—</div>
+      <div class="kpi-label">Cumplen Meta</div>
+      <div class="kpi-meta" id="kpiCumpleMeta"></div>
+    </div>
+    <div class="kpi-card c-amber">
+      <span class="kpi-icon">🕐</span>
+      <div class="kpi-val" id="kpiHoras">—</div>
+      <div class="kpi-label">Horas Totales</div>
+      <div class="kpi-meta" id="kpiHorasMeta"></div>
+    </div>
+  </div>
+
+  <!-- CHARTS ROW 1 -->
+  <div class="row2" style="margin-bottom:14px">
+    <div class="card">
+      <div class="card-title"><span><span class="ct-accent" style="background:var(--blue)"></span>Distribución por SURACUP</span></div>
+      <div class="chart-wrap"><canvas id="chartSuracup"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span><span class="ct-accent" style="background:var(--green)"></span>Top 15 Médicos — Pac/Hora</span></div>
+      <div class="chart-wrap"><canvas id="chartTopMedicos"></canvas></div>
+    </div>
+  </div>
+
+  <!-- CHARTS ROW 2 -->
+  <div class="row2" style="margin-bottom:14px">
+    <div class="card">
+      <div class="card-title"><span><span class="ct-accent" style="background:#D4A72C"></span>Consultas por Día</span></div>
+      <div class="chart-wrap"><canvas id="chartTendencia"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span><span class="ct-accent" style="background:var(--purple)"></span>Distribución Pac/Hora</span></div>
+      <div class="chart-wrap"><canvas id="chartDistribucion"></canvas></div>
+    </div>
+  </div>
+
+  <!-- RANKINGS -->
+  <div class="row2" style="margin-bottom:14px">
+    <div class="card">
+      <div class="card-title"><span><span class="ct-accent" style="background:var(--green)"></span>🏆 Top Productividad</span></div>
+      <div class="rank-list" id="rankTop"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span><span class="ct-accent" style="background:var(--red)"></span>⚠️ Requieren Atención</span></div>
+      <div class="rank-list" id="rankBottom"></div>
+    </div>
+  </div>
+
+  <!-- TABLE -->
+  <div class="table-card">
+    <div class="table-top">
+      <div class="table-top-left">
+        <h3>Detalle por Médico</h3>
+        <span class="tbl-count" id="tblCount">0</span>
+      </div>
+      <div class="table-top-right">
+        <input type="text" class="tbl-search" id="tblSearch" placeholder="Buscar médico..." oninput="aplicarFiltros()">
+        <button class="btn-export" onclick="exportarCSV()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Exportar CSV
+        </button>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th onclick="ordenarPor(0)" data-col="0">Médico</th>
+            <th onclick="ordenarPor(1)" data-col="1">Fecha</th>
+            <th onclick="ordenarPor(2)" data-col="2" style="text-align:right">H. Inicio</th>
+            <th onclick="ordenarPor(3)" data-col="3" style="text-align:right">H. Fin</th>
+            <th onclick="ordenarPor(4)" data-col="4" style="text-align:right">Horas</th>
+            <th onclick="ordenarPor(5)" data-col="5" style="text-align:right">Consultas</th>
+            <th onclick="ordenarPor(6)" data-col="6" style="text-align:right">Pac/Hora</th>
+            <th onclick="ordenarPor(7)" data-col="7">Meta</th>
+            <th>SURACUP</th>
+          </tr>
+        </thead>
+        <tbody id="tblBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer">
+  Actualizado: <span id="lastUpdate">—</span> &nbsp;·&nbsp;
+  holadr.com.co &nbsp;·&nbsp; Dashboard de Productividad Médica RIPS
+</div>
+
+<script>
+// ============================================================
+//  CONFIGURACIÓN
+// ============================================================
+var CONFIG = { clientId:'', tenantId:'', filePath:'', sheetName:'Hoja1', meta:3, modoDemo:true };
+var _msalApp=null, _accessToken=null;
+var SURACUP_MAP = {'7000026':'CONSULTA TELEMEDICINA MG (IPS VIRTUAL)','50112':'CONTROL MÉDICO GENERAL','3000056':'TELEMEDICINA PRIORITARIA','8903019':'GESTIÓN MÉDICO GENERAL'};
+var allData=[], filteredData=[], sortState={col:6,dir:'desc'}, charts={};
+
+// ============================================================
+//  INIT
+// ============================================================
+window.addEventListener('load',function(){
+  _ensurePapa();
+  cargarConfigGuardada();
+  if(CONFIG.modoDemo){ document.getElementById('modalOverlay').classList.remove('hidden'); cargarDatosDemo(); }
+  else { document.getElementById('modalOverlay').classList.add('hidden'); document.getElementById('configBanner').classList.add('hidden'); cargarDatos(); }
+});
+
+function cargarConfigGuardada(){
+  try{
+    var s=localStorage.getItem('rips_cfg');
+    if(s){ var c=JSON.parse(s); CONFIG.clientId=c.clientId||''; CONFIG.tenantId=c.tenantId||''; CONFIG.filePath=c.filePath||''; CONFIG.sheetName=c.sheetName||'Hoja1'; CONFIG.meta=parseFloat(c.meta)||3; CONFIG.modoDemo=!(CONFIG.clientId&&CONFIG.tenantId&&CONFIG.filePath); }
+  }catch(e){}
+}
+
+// ── Modal helpers ────────────────────────────────────────────
+function switchTab(n){
+  document.getElementById('tabContent1').style.display=n===1?'':'none';
+  document.getElementById('tabContent2').style.display=n===2?'':'none';
+  document.getElementById('tabContent3').style.display=n===3?'':'none';
+  document.getElementById('tab1').style.background=n===1?'#0078D4':'var(--surface)';
+  document.getElementById('tab1').style.color=n===1?'white':'var(--ink3)';
+  document.getElementById('tab2').style.background=n===2?'var(--blue)':'var(--surface)';
+  document.getElementById('tab2').style.color=n===2?'white':'var(--ink3)';
+  document.getElementById('tab3').style.background=n===3?'var(--amber)':'var(--surface)';
+  document.getElementById('tab3').style.color=n===3?'white':'var(--ink3)';
+}
+function guardarConfigGraph(){
+  var cid=document.getElementById('inputClientId').value.trim();
+  var tid=document.getElementById('inputTenantId').value.trim();
+  var fp=document.getElementById('inputFilePath').value.trim();
+  var sn=document.getElementById('inputSheetName').value.trim()||'Hoja1';
+  var meta=parseFloat(document.getElementById('inputMeta').value)||3;
+  if(!cid||!tid||!fp){ alert('Completa Client ID, Tenant ID y la ruta del archivo.'); return; }
+  CONFIG.clientId=cid; CONFIG.tenantId=tid; CONFIG.filePath=fp; CONFIG.sheetName=sn; CONFIG.meta=meta; CONFIG.modoDemo=false;
+  _msalApp=null; _accessToken=null;
+  localStorage.setItem('rips_cfg',JSON.stringify(CONFIG));
+  cerrarModal(); document.getElementById('configBanner').classList.add('hidden'); cargarDatos();
+}
+function mostrarInstruccionesServidor(){
+  document.getElementById('btnRefresh').classList.remove('spinning');
+  // Mostrar tab de instrucciones en el modal
+  switchTab(3);
+  document.getElementById('modalOverlay').classList.remove('hidden');
+}
+
+function abrirConfig(){
+  document.getElementById('inputClientId').value=CONFIG.clientId;
+  document.getElementById('inputTenantId').value=CONFIG.tenantId;
+  document.getElementById('inputFilePath').value=CONFIG.filePath;
+  document.getElementById('inputSheetName').value=CONFIG.sheetName;
+  document.getElementById('inputMeta').value=CONFIG.meta;
+  switchTab(1);
+  document.getElementById('modalOverlay').classList.remove('hidden');
+}
+function cerrarModal(){ document.getElementById('modalOverlay').classList.add('hidden'); }
+function usarDatosDemo(){ CONFIG.modoDemo=true; cerrarModal(); cargarDatosDemo(); }
+
+// ── Sync state indicator ─────────────────────────────────────
+function setSyncState(state,label){
+  var d=document.getElementById('syncDot');
+  d.className='sync-dot'+(state==='loading'?' loading':state==='error'?' error':'');
+  document.getElementById('syncLabel').textContent=label;
+}
+
+// ============================================================
+//  CARGA PRINCIPAL
+// ============================================================
+function cargarDatos(){
+  if(CONFIG.modoDemo){ cargarDatosDemo(); return; }
+  Array.from(document.getElementById('alertsRow').querySelectorAll('.chip.red')).forEach(function(e){e.remove();});
+  document.getElementById('btnRefresh').classList.add('spinning');
+  setSyncState('loading','Conectando con OneDrive...');
+
+  // Verificar que MSAL cargó correctamente
+  if(window._msalFailed || typeof msal==='undefined'){
+    falloConexion(
+      'La librería de autenticación Microsoft (MSAL) no pudo cargar. ' +
+      'Esto ocurre cuando el archivo se abre con doble clic (file://). ' +
+      'Solución: abre el archivo desde un servidor local. ' +
+      'Lee las instrucciones haciendo clic en "Configurar".'
+    );
+    // Mostrar instrucciones en el modal
+    mostrarInstruccionesServidor();
+    return;
+  }
+  autenticarYLeer();
+}
+
+// ── MSAL — autenticación ─────────────────────────────────────
+function autenticarYLeer(){
+  try{
+    if(!_msalApp){
+      _msalApp=new msal.PublicClientApplication({
+        auth:{ clientId:CONFIG.clientId, authority:'https://login.microsoftonline.com/'+CONFIG.tenantId,
+               redirectUri:window.location.href.split('?')[0].split('#')[0] },
+        cache:{ cacheLocation:'localStorage', storeAuthStateInCookie:true }
+      });
+    }
+    var scopes=['https://graph.microsoft.com/Files.Read','User.Read'];
+    var accounts=_msalApp.getAllAccounts();
+    if(accounts.length>0){
+      _msalApp.acquireTokenSilent({scopes:scopes,account:accounts[0]})
+        .then(function(r){ leerExcelOneDrive(r.accessToken); })
+        .catch(function(){ loginPopup(scopes); });
+    } else { loginPopup(scopes); }
+  }catch(e){ falloConexion('Error iniciando autenticación: '+e.message); }
+}
+function loginPopup(scopes){
+  setSyncState('loading','Esperando inicio de sesión Microsoft...');
+  _msalApp.loginPopup({scopes:scopes})
+    .then(function(resp){ return _msalApp.acquireTokenSilent({scopes:scopes,account:resp.account}); })
+    .then(function(r){ leerExcelOneDrive(r.accessToken); })
+    .catch(function(e){ falloConexion('Login cancelado o fallido: '+e.message); });
+}
+
+// ── Graph API — leer Excel de OneDrive ───────────────────────
+function leerExcelOneDrive(token){
+  setSyncState('loading','Leyendo Excel de OneDrive...');
+  var h={'Authorization':'Bearer '+token};
+  // Ruta: GET /me/drive/root:/{filePath}:/workbook/worksheets/{sheet}/usedRange
+  var encodedPath=CONFIG.filePath.split('/').map(encodeURIComponent).join('/');
+  var url='https://graph.microsoft.com/v1.0/me/drive/root:/'+encodedPath+':/workbook/worksheets/'+encodeURIComponent(CONFIG.sheetName)+'/usedRange?$select=values';
+  fetch(url,{headers:h})
+    .then(function(r){
+      if(r.status===401){ _accessToken=null; falloConexion('Sesión expirada. Haz clic en Actualizar para volver a iniciar sesión.'); return null; }
+      if(r.status===404){ falloConexion('Archivo no encontrado: "'+CONFIG.filePath+'". Verifica la ruta exacta en OneDrive (ej: Documentos/RIPS.xlsx)'); return null; }
+      if(!r.ok){ return r.text().then(function(t){ falloConexion('Error '+r.status+': '+t.substring(0,200)); return null; }); }
+      return r.json();
+    })
+    .then(function(data){
+      if(!data) return;
+      var values=data.values;
+      if(!values||values.length<2){ falloConexion('La hoja "'+CONFIG.sheetName+'" está vacía o no tiene datos.'); return; }
+      var headers=values[0].map(function(h){ return String(h).trim().toLowerCase().replace(/\s+/g,'_').replace(/[áä]/g,'a').replace(/[éë]/g,'e').replace(/[íï]/g,'i').replace(/[óö]/g,'o').replace(/[úü]/g,'u').replace(/ñ/g,'n'); });
+      var raw=[];
+      for(var i=1;i<values.length;i++){
+        if(!values[i]||values[i].every(function(v){return v===''||v===null||v===undefined;})) continue;
+        var r={}; headers.forEach(function(h,j){ r[h]=values[i][j]!==undefined?values[i][j]:''; }); raw.push(r);
+      }
+      var rows=normalizarFilas(raw);
+      if(!rows.length){ falloConexion('Se leyeron '+raw.length+' filas sin datos válidos. Verifica columnas: fecha, medico, suracup, consultas, hora_inicio, hora_fin, horas_trabajadas'); return; }
+      document.getElementById('btnRefresh').classList.remove('spinning');
+      setSyncState('ok','Actualizado '+new Date().toLocaleTimeString('es-CO'));
+      document.getElementById('lastUpdate').textContent=new Date().toLocaleString('es-CO');
+      procesarFilas(rows);
+    })
+    .catch(function(e){ falloConexion(e.message); });
+}
+function falloConexion(msg){
+  document.getElementById('btnRefresh').classList.remove('spinning');
+  setSyncState('error','Error'); mostrarErrorConexion(msg);
+}
+
+// ============================================================
+//  DRAG & DROP / SELECTOR DE ARCHIVO
+// ============================================================
+function handleFileDrop(event){
+  event.preventDefault();
+  document.getElementById('dropZone').style.borderColor='var(--border)';
+  document.getElementById('dropZone').style.background='var(--surface)';
+  if(event.dataTransfer.files[0]) procesarArchivo(event.dataTransfer.files[0]);
+}
+function handleFileSelect(event){ if(event.target.files[0]) procesarArchivo(event.target.files[0]); }
+
+function procesarArchivo(file){
+  var st=document.getElementById('fileStatus');
+  st.style.display='block'; st.style.background='var(--blue-bg)'; st.style.borderColor='var(--blue-border)'; st.style.color='var(--blue)';
+  st.textContent='⏳ Leyendo '+file.name+'...';
+  CONFIG.meta=parseFloat(document.getElementById('inputMeta').value)||3;
+  var ext=file.name.split('.').pop().toLowerCase(), reader=new FileReader();
+  if(ext==='csv'){
+    reader.onload=function(e){ try{ _ensurePapa(); finalizarArchivo(file.name,normalizarFilas(Papa.parse(e.target.result,{header:true,skipEmptyLines:true,dynamicTyping:true,transformHeader:function(h){return h.trim().toLowerCase().replace(/\s+/g,'_').replace(/[áä]/g,'a').replace(/[éë]/g,'e').replace(/[íï]/g,'i').replace(/[óö]/g,'o').replace(/[úü]/g,'u').replace(/ñ/g,'n');}}).data),st); }catch(e){ errorArchivo(st,e.message); } };
+    reader.readAsText(file,'UTF-8');
+  } else if(ext==='xlsx'||ext==='xls'){
+    reader.onload=function(e){ try{
+      if(typeof XLSX==='undefined') throw new Error('Librería XLSX no disponible.');
+      var wb=XLSX.read(e.target.result,{type:'array',cellDates:true}); var sn=wb.SheetNames[0];
+      wb.SheetNames.forEach(function(s){ if(s.toLowerCase().match(/rip|dato|medic/)) sn=s; });
+      var json=XLSX.utils.sheet_to_json(wb.Sheets[sn],{defval:'',raw:false,dateNF:'YYYY-MM-DD'});
+      var norm=json.map(function(row){ var nr={}; Object.keys(row).forEach(function(k){ nr[k.trim().toLowerCase().replace(/\s+/g,'_').replace(/[áä]/g,'a').replace(/[éë]/g,'e').replace(/[íï]/g,'i').replace(/[óö]/g,'o').replace(/[úü]/g,'u').replace(/ñ/g,'n')]=row[k]; }); return nr; });
+      finalizarArchivo(file.name,normalizarFilas(norm),st);
+    }catch(e){ errorArchivo(st,e.message); } };
+    reader.readAsArrayBuffer(file);
+  } else { errorArchivo(st,'Formato no soportado. Usa .xlsx, .xls o .csv'); }
+}
+function finalizarArchivo(nombre,rows,statusEl){
+  if(!rows.length){ errorArchivo(statusEl,'Sin datos válidos. Columnas requeridas: fecha, medico, suracup, consultas, hora_inicio, hora_fin, horas_trabajadas'); return; }
+  statusEl.style.background='var(--green-bg)'; statusEl.style.borderColor='var(--green-border)'; statusEl.style.color='var(--green)';
+  statusEl.textContent='✅ '+nombre+' — '+rows.length+' registros cargados';
+  cerrarModal(); document.getElementById('configBanner').classList.add('hidden'); procesarFilas(rows);
+}
+function errorArchivo(statusEl,msg){ statusEl.style.background='var(--red-bg)'; statusEl.style.borderColor='var(--red-border)'; statusEl.style.color='var(--red)'; statusEl.textContent='❌ '+msg; }
+
+// ============================================================
+//  NORMALIZAR FILAS — acepta cualquier nombre de columna
+// ============================================================
+function normalizarFilas(data){
+  return data.map(function(r){
+    var fecha=String(r.fecha||r.fecha_atencion||r.date||r.fecha_consulta||'').trim();
+    if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(fecha)){ var p=fecha.split('/'); fecha=p[2]+'-'+p[1].padStart(2,'0')+'-'+p[0].padStart(2,'0'); }
+    else if(/^\d{1,2}-\d{1,2}-\d{4}$/.test(fecha)){ var p2=fecha.split('-'); fecha=p2[2]+'-'+p2[1].padStart(2,'0')+'-'+p2[0].padStart(2,'0'); }
+    function horaD(v){ if(!v) return ''; var s=String(v); if(!isNaN(s)){ var n=parseFloat(s); if(n>0&&n<1){ var m=Math.round(n*1440),h=Math.floor(m/60); return (h<10?'0':'')+h+':'+(m%60<10?'0':'')+(m%60); } } return s; }
+    return {
+      fecha:            fecha,
+      medico_id:        String(r.medico_id||r.id_medico||r.cedula||r.documento||'').trim(),
+      medico:           String(r.medico||r.nombre_medico||r.nombre||r.medico_nombre||'').trim().toUpperCase(),
+      suracup:          String(r.suracup||r.codigo_suracup||r.cod_suracup||r.codigo||r.cup||'').trim(),
+      prestacion:       String(r.prestacion||r.tipo_prestacion||r.servicio||r.descripcion||'').trim().toUpperCase(),
+      consultas:        parseFloat(r.consultas||r.num_consultas||r.atenciones||r.cantidad||0)||0,
+      hora_inicio:      horaD(r.hora_inicio||r.inicio||r.hora_inicio_turno||''),
+      hora_fin:         horaD(r.hora_fin||r.fin||r.hora_fin_turno||''),
+      horas_trabajadas: parseFloat(r.horas_trabajadas||r.horas||r.duracion||1)||1
+    };
+  }).filter(function(r){ return r.medico&&r.consultas>0&&r.fecha; });
+}
+
+// ============================================================
+//  PROCESAMIENTO DE FILAS → doctors aggregados
+// ============================================================
+function procesarFilas(rows){
+  // Agrupar por médico + fecha
+  var agr = {};
+  rows.forEach(function(r){
+    var key = r.medico_id + '_' + r.fecha;
+    if(!agr[key]){
+      agr[key] = {
+        fecha: r.fecha, medico_id: r.medico_id, medico: r.medico,
+        consultas:0, hora_inicio: r.hora_inicio, hora_fin: r.hora_fin,
+        horas_trabajadas: r.horas_trabajadas,
+        suracup_breakdown:{}, prestaciones: new Set()
+      };
+    }
+    var d = agr[key];
+    d.consultas += r.consultas;
+    d.suracup_breakdown[r.suracup] = (d.suracup_breakdown[r.suracup]||0) + r.consultas;
+    if(r.hora_inicio < d.hora_inicio) d.hora_inicio = r.hora_inicio;
+    if(r.hora_fin > d.hora_fin) d.hora_fin = r.hora_fin;
+    d.prestaciones.add(r.suracup);
+  });
+
+  var doctors = Object.values(agr).map(function(d){
+    var pph = d.horas_trabajadas > 0 ? d.consultas / d.horas_trabajadas : 0;
+    return Object.assign(d, {
+      pacientes_hora: Math.round(pph*100)/100,
+      cumple_meta: pph >= CONFIG.meta
+    });
+  });
+
+  var fechas = [...new Set(doctors.map(function(d){return d.fecha}))].sort();
+
+  allData = doctors;
+
+  // Actualizar SURACUP_MAP con nuevos códigos encontrados
+  rows.forEach(function(r){
+    if(!SURACUP_MAP[r.suracup]) SURACUP_MAP[r.suracup] = r.prestacion || r.suracup;
+  });
+
+  document.getElementById('btnRefresh').classList.remove('spinning');
+  setSyncState('ok', 'Actualizado ' + new Date().toLocaleTimeString('es-CO'));
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleString('es-CO');
+
+  // Periodo en header
+  if(fechas.length){
+    document.getElementById('topbarPeriodo').textContent =
+      fechas.length===1 ? fmtFecha(fechas[0]) : fmtFecha(fechas[0]) + ' – ' + fmtFecha(fechas[fechas.length-1]);
+  }
+
+  poblarFiltros(doctors, fechas);
+  aplicarFiltros();
+}
+
+// ============================================================
+//  FILTROS
+// ============================================================
+function poblarFiltros(doctors, fechas){
+  var selFecha = document.getElementById('fFecha');
+  selFecha.innerHTML = '<option value="">Todas las fechas</option>';
+  fechas.forEach(function(f){ selFecha.innerHTML += '<option value="'+f+'">'+fmtFecha(f)+'</option>'; });
+
+  var medicos = [...new Set(doctors.map(function(d){return d.medico}))].sort();
+  var selMed = document.getElementById('fMedico');
+  selMed.innerHTML = '<option value="">Todos los médicos</option>';
+  medicos.forEach(function(m){ selMed.innerHTML += '<option value="'+m+'">'+m+'</option>'; });
+
+  var codigos = [...new Set(doctors.flatMap(function(d){return Object.keys(d.suracup_breakdown)}))].sort();
+  var selS = document.getElementById('fSuracup');
+  selS.innerHTML = '<option value="">Todas las prestaciones</option>';
+  codigos.forEach(function(k){ selS.innerHTML += '<option value="'+k+'">'+k+' – '+(SURACUP_MAP[k]||k)+'</option>'; });
+}
+
+function aplicarFiltros(){
+  var fecha   = document.getElementById('fFecha').value;
+  var medico  = document.getElementById('fMedico').value;
+  var suracup = document.getElementById('fSuracup').value;
+  var meta    = document.getElementById('fMeta').value;
+  var search  = document.getElementById('tblSearch').value.toLowerCase();
+
+  filteredData = allData.filter(function(d){
+    if(fecha && d.fecha !== fecha) return false;
+    if(medico && d.medico !== medico) return false;
+    if(suracup && !d.suracup_breakdown[suracup]) return false;
+    if(meta==='si' && !d.cumple_meta) return false;
+    if(meta==='no' && d.cumple_meta) return false;
+    if(search && !d.medico.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  actualizarKPIs(filteredData);
+  actualizarAlertas(filteredData);
+  actualizarTabla(filteredData);
+  actualizarGraficas(filteredData);
+  actualizarRankings(filteredData);
+}
+
+function limpiarFiltros(){
+  ['fFecha','fMedico','fSuracup','fMeta'].forEach(function(id){ document.getElementById(id).value=''; });
+  document.getElementById('tblSearch').value='';
+  aplicarFiltros();
+}
+
+// ============================================================
+//  KPIs
+// ============================================================
+function actualizarKPIs(data){
+  var totalC = data.reduce(function(s,d){return s+d.consultas},0);
+  var totalM = new Set(data.map(function(d){return d.medico_id})).size;
+  var totalH = data.reduce(function(s,d){return s+d.horas_trabajadas},0);
+  var avgPPH = totalH>0 ? totalC/totalH : 0;
+  var cumple = data.filter(function(d){return d.cumple_meta}).length;
+  var pct    = data.length>0 ? (cumple/data.length*100) : 0;
+
+  animNum('kpiTotal', totalC);
+  animNum('kpiMedicos', totalM);
+  document.getElementById('kpiPPH').textContent = avgPPH.toFixed(1);
+  document.getElementById('kpiCumple').textContent = pct.toFixed(0)+'%';
+  animNum('kpiHoras', Math.round(totalH));
+
+  document.getElementById('kpiTotalMeta').textContent = data.length+' registros médico-día';
+  document.getElementById('kpiMedicosMeta').textContent = 'en '+[...new Set(data.map(function(d){return d.fecha}))].length+' días';
+  document.getElementById('kpiMetaLabel').textContent = 'Meta: '+CONFIG.meta+'.0 pac/hora';
+  document.getElementById('kpiCumpleMeta').textContent = cumple+' de '+data.length+' registros';
+  document.getElementById('kpiHorasMeta').textContent = 'Prom: '+(data.length>0?(totalH/data.length).toFixed(1):'0')+' h/médico';
+
+  var card = document.getElementById('kpiPPHCard');
+  card.className = 'kpi-card '+(avgPPH>=CONFIG.meta?'c-green':avgPPH>=CONFIG.meta*0.75?'c-amber':'c-red');
+}
+
+// ============================================================
+//  ALERTAS INTELIGENTES
+// ============================================================
+function actualizarAlertas(data){
+  var row = document.getElementById('alertsRow');
+  row.innerHTML = '';
+  if(!data.length) return;
+
+  var pct    = data.filter(function(d){return d.cumple_meta}).length / data.length * 100;
+  var avgPPH = data.reduce(function(s,d){return s+d.consultas},0) /
+               Math.max(data.reduce(function(s,d){return s+d.horas_trabajadas},0),1);
+  var bajosCount = data.filter(function(d){return d.pacientes_hora < CONFIG.meta*0.7}).length;
+  var superCount = data.filter(function(d){return d.pacientes_hora >= CONFIG.meta*1.5}).length;
+
+  var chips = [];
+  if(pct >= 70) chips.push({type:'green', text: pct.toFixed(0)+'% cumplen la meta de '+CONFIG.meta+' pac/hora'});
+  else chips.push({type:'red', text: 'Solo '+pct.toFixed(0)+'% cumplen la meta — requiere acción'});
+
+  if(bajosCount > 0) chips.push({type:'amber', text: bajosCount+' médico'+(bajosCount>1?'s':'')+' con productividad crítica (<'+(CONFIG.meta*0.7).toFixed(1)+' pac/h)'});
+  if(superCount > 0) chips.push({type:'blue', text: superCount+' médico'+(superCount>1?'s':'')+' con alto rendimiento (≥'+(CONFIG.meta*1.5).toFixed(1)+' pac/h)'});
+  if(avgPPH < CONFIG.meta) chips.push({type:'red', text:'Promedio general ('+avgPPH.toFixed(1)+') está por debajo de meta'});
+
+  chips.forEach(function(c, i){
+    var el = document.createElement('div');
+    el.className = 'chip '+c.type;
+    el.style.animationDelay = (i*80)+'ms';
+    el.innerHTML = '<span class="chip-dot"></span>'+c.text;
+    row.appendChild(el);
+  });
+}
+
+// ============================================================
+//  TABLA
+// ============================================================
+function actualizarTabla(data){
+  var sorted = ordenarData(data);
+  document.getElementById('tblCount').textContent = sorted.length;
+
+  var pills_class = {'7000026':'s1','50112':'s2','3000056':'s3','8903019':'s4'};
+  var html = sorted.map(function(d){
+    var pph = d.pacientes_hora;
+    var pct = Math.min((pph/5)*100, 100);
+    var color = pph>=CONFIG.meta ? '#1A7F37' : pph>=CONFIG.meta*0.75 ? '#9A6700' : '#CF222E';
+    var fillColor = pph>=CONFIG.meta ? 'var(--green)' : pph>=CONFIG.meta*0.75 ? '#D4A72C' : 'var(--red)';
+    var badge = d.cumple_meta
+      ? '<span class="badge ok">✓ Cumple</span>'
+      : '<span class="badge no">✗ No cumple</span>';
+    var pills = Object.entries(d.suracup_breakdown).map(function(e){
+      var cls = pills_class[e[0]]||'s1';
+      var lbl = shortSuracup(e[0]);
+      return '<span class="pill '+cls+'">'+lbl+': '+e[1]+'</span>';
+    }).join('');
+    return '<tr>'+
+      '<td class="td-doctor">'+d.medico+'</td>'+
+      '<td>'+fmtFecha(d.fecha)+'</td>'+
+      '<td class="td-right">'+d.hora_inicio+'</td>'+
+      '<td class="td-right">'+d.hora_fin+'</td>'+
+      '<td class="td-right">'+d.horas_trabajadas.toFixed(1)+'h</td>'+
+      '<td class="td-right" style="font-weight:600">'+d.consultas+'</td>'+
+      '<td class="td-right"><div class="pph-wrap"><strong style="color:'+color+'">'+pph.toFixed(1)+'</strong>'+
+        '<div class="pph-bar"><div class="pph-fill" style="width:'+pct+'%;background:'+fillColor+'"></div></div></div></td>'+
+      '<td>'+badge+'</td>'+
+      '<td><div class="pills">'+pills+'</div></td>'+
+    '</tr>';
+  }).join('');
+
+  // Fila de totales
+  if(sorted.length){
+    var tc = sorted.reduce(function(s,d){return s+d.consultas},0);
+    var th = sorted.reduce(function(s,d){return s+d.horas_trabajadas},0);
+    var ap = th>0 ? (tc/th) : 0;
+    html += '<tr class="tbl-summary">'+
+      '<td>TOTAL / PROMEDIO</td><td colspan="3"></td>'+
+      '<td class="td-right">'+th.toFixed(0)+'h</td>'+
+      '<td class="td-right">'+tc+'</td>'+
+      '<td class="td-right"><strong>'+ap.toFixed(1)+'</strong></td>'+
+      '<td><span class="badge '+(ap>=CONFIG.meta?'ok':'no')+'">'+(ap>=CONFIG.meta?'✓':'✗')+' '+ap.toFixed(1)+' p/h</span></td>'+
+      '<td></td></tr>';
+  }
+
+  document.getElementById('tblBody').innerHTML = html || '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--ink4)">Sin registros para los filtros seleccionados</td></tr>';
+}
+
+// ============================================================
+//  GRÁFICAS
+// ============================================================
+function actualizarGraficas(data){
+  // 1. Donut SURACUP
+  var suracupTot = {};
+  data.forEach(function(d){ Object.entries(d.suracup_breakdown).forEach(function(e){ suracupTot[e[0]] = (suracupTot[e[0]]||0)+e[1]; }); });
+  var labels1 = Object.keys(suracupTot).map(function(k){return shortSuracup(k)});
+  var vals1   = Object.values(suracupTot);
+  grafica('chartSuracup','doughnut',{
+    labels: labels1,
+    datasets:[{data:vals1, backgroundColor:['#0969DA','#1A7F37','#D4A72C','#6639BA'], borderWidth:3, borderColor:'#fff', hoverOffset:6}]
+  },{
+    responsive:true, maintainAspectRatio:true, cutout:'62%',
+    plugins:{legend:{position:'bottom',labels:{padding:14,font:{family:'DM Sans',size:11},usePointStyle:true,pointStyle:'circle'}},
+      tooltip:{callbacks:{label:function(c){var t=c.dataset.data.reduce(function(a,b){return a+b},0);return ' '+c.label+': '+c.raw.toLocaleString()+' ('+((c.raw/t)*100).toFixed(1)+'%)'}},backgroundColor:'#0D1117',padding:10,cornerRadius:6,titleFont:{family:'Syne'},bodyFont:{family:'DM Sans'}}
+    }
+  });
+
+  // 2. Bar Top médicos
+  var medAgg = {};
+  data.forEach(function(d){
+    if(!medAgg[d.medico]) medAgg[d.medico]={c:0,h:0};
+    medAgg[d.medico].c += d.consultas; medAgg[d.medico].h += d.horas_trabajadas;
+  });
+  var arr = Object.entries(medAgg).map(function(e){return{name:e[0],pph:e[1].h>0?e[1].c/e[1].h:0,c:e[1].c}});
+  arr.sort(function(a,b){return b.pph-a.pph});
+  var top = arr.slice(0,15);
+  grafica('chartTopMedicos','bar',{
+    labels: top.map(function(m){return m.name.length>22?m.name.substring(0,22)+'…':m.name}),
+    datasets:[{
+      label:'Pac/Hora', data:top.map(function(m){return +m.pph.toFixed(2)}),
+      backgroundColor:top.map(function(m){return m.pph>=CONFIG.meta?'rgba(26,127,55,.75)':m.pph>=CONFIG.meta*0.75?'rgba(212,167,44,.75)':'rgba(207,34,46,.75)'}),
+      borderColor:top.map(function(m){return m.pph>=CONFIG.meta?'#1A7F37':m.pph>=CONFIG.meta*0.75?'#9A6700':'#CF222E'}),
+      borderWidth:1, borderRadius:4
+    }]
+  },{
+    indexAxis:'y', responsive:true, maintainAspectRatio:true,
+    scales:{
+      x:{grid:{color:'#EAEEF2'},ticks:{font:{family:'DM Mono',size:10}},title:{display:true,text:'Pacientes / Hora',font:{family:'Syne',size:11,weight:600},color:'#57606A'}},
+      y:{grid:{display:false},ticks:{font:{family:'DM Sans',size:10}}}
+    },
+    plugins:{legend:{display:false},tooltip:{backgroundColor:'#0D1117',padding:10,cornerRadius:6,titleFont:{family:'Syne'},bodyFont:{family:'DM Mono'},callbacks:{afterLabel:function(c){return 'Consultas: '+top[c.dataIndex].c}}}}
+  });
+
+  // 3. Línea tendencia por día
+  var byDate = {};
+  data.forEach(function(d){ byDate[d.fecha] = (byDate[d.fecha]||0)+d.consultas; });
+  var fechas = Object.keys(byDate).sort();
+  grafica('chartTendencia','line',{
+    labels: fechas.map(fmtFecha),
+    datasets:[{
+      label:'Consultas', data:fechas.map(function(f){return byDate[f]}),
+      fill:true, tension:.4,
+      borderColor:'#D4A72C', backgroundColor:'rgba(212,167,44,.12)',
+      pointBackgroundColor:'#D4A72C', pointRadius:4, pointHoverRadius:6
+    }]
+  },{
+    responsive:true, maintainAspectRatio:true,
+    scales:{x:{grid:{display:false},ticks:{font:{family:'DM Sans',size:10}}},y:{grid:{color:'#EAEEF2'},ticks:{font:{family:'DM Mono',size:10}}}},
+    plugins:{legend:{display:false},tooltip:{backgroundColor:'#0D1117',padding:10,cornerRadius:6,bodyFont:{family:'DM Mono'}}}
+  });
+
+  // 4. Histograma distribución pac/hora
+  var buckets = [0,0,0,0,0];
+  var m = CONFIG.meta;
+  data.forEach(function(d){
+    var p = d.pacientes_hora;
+    if(p < m*0.5) buckets[0]++;
+    else if(p < m*0.75) buckets[1]++;
+    else if(p < m) buckets[2]++;
+    else if(p < m*1.5) buckets[3]++;
+    else buckets[4]++;
+  });
+  grafica('chartDistribucion','bar',{
+    labels:['Crítico\n(<'+(m*.5).toFixed(1)+')', 'Bajo\n(<'+(m*.75).toFixed(1)+')', 'Medio\n(<'+m+')', 'Meta\n(≥'+m+')', 'Alto\n(≥'+(m*1.5).toFixed(1)+')'],
+    datasets:[{
+      data:buckets,
+      backgroundColor:['rgba(207,34,46,.8)','rgba(207,34,46,.5)','rgba(212,167,44,.75)','rgba(26,127,55,.75)','rgba(9,105,218,.75)'],
+      borderRadius:5, borderSkipped:false
+    }]
+  },{
+    responsive:true, maintainAspectRatio:true,
+    scales:{x:{grid:{display:false},ticks:{font:{family:'DM Sans',size:10}}},y:{grid:{color:'#EAEEF2'},ticks:{font:{family:'DM Mono',size:10},stepSize:1}}},
+    plugins:{legend:{display:false},tooltip:{backgroundColor:'#0D1117',padding:10,cornerRadius:6,bodyFont:{family:'DM Mono'},callbacks:{label:function(c){return ' '+c.raw+' médicos'}}}}
+  });
+}
+
+function grafica(id, type, data, options){
+  if(charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), {type:type, data:data, options:options});
+}
+
+// ============================================================
+//  RANKINGS
+// ============================================================
+function actualizarRankings(data){
+  var medAgg = {};
+  data.forEach(function(d){
+    if(!medAgg[d.medico]) medAgg[d.medico]={c:0,h:0,dias:0};
+    medAgg[d.medico].c += d.consultas;
+    medAgg[d.medico].h += d.horas_trabajadas;
+    medAgg[d.medico].dias++;
+  });
+  var arr = Object.entries(medAgg).map(function(e){
+    return {name:e[0], pph: e[1].h>0 ? e[1].c/e[1].h : 0, c:e[1].c};
+  });
+  arr.sort(function(a,b){return b.pph-a.pph});
+
+  var maxPPH = arr.length ? arr[0].pph : 1;
+  var top = arr.slice(0,8);
+  var bot = arr.slice(-8).reverse();
+
+  function filaRank(item, idx, lista, es_top){
+    var colors = ['','g1','g2','g3'];
+    var nc = idx<3 ? colors[idx+1] : '';
+    var pct = Math.min((item.pph/maxPPH)*100, 100);
+    var barColor = item.pph>=CONFIG.meta ? 'var(--green)' : item.pph>=CONFIG.meta*0.75 ? '#D4A72C' : 'var(--red)';
+    return '<div class="rank-row">'+
+      '<div class="rank-n '+nc+'">'+(idx+1)+'</div>'+
+      '<div class="rank-name" title="'+item.name+'">'+item.name+'</div>'+
+      '<div class="rank-bar-bg"><div class="rank-bar-fill" style="width:'+pct+'%;background:'+barColor+'"></div></div>'+
+      '<div class="rank-val">'+item.pph.toFixed(1)+'</div>'+
+      '<span class="rank-badge '+(item.pph>=CONFIG.meta?'ok':'no')+'">'+(item.pph>=CONFIG.meta?'✓':'✗')+'</span>'+
+    '</div>';
+  }
+
+  document.getElementById('rankTop').innerHTML    = top.map(function(it,i){return filaRank(it,i,top,true)}).join('');
+  document.getElementById('rankBottom').innerHTML = bot.map(function(it,i){return filaRank(it,i,bot,false)}).join('');
+}
+
+// ============================================================
+//  SORTING
+// ============================================================
+function ordenarPor(col){
+  if(sortState.col===col) sortState.dir = sortState.dir==='asc'?'desc':'asc';
+  else { sortState.col=col; sortState.dir=col===0?'asc':'desc'; }
+  document.querySelectorAll('thead th').forEach(function(th){ th.classList.remove('sort-asc','sort-desc'); });
+  var th = document.querySelector('thead th[data-col="'+col+'"]');
+  if(th) th.classList.add('sort-'+sortState.dir);
+  actualizarTabla(filteredData);
+}
+
+function ordenarData(data){
+  var col=sortState.col, dir=sortState.dir==='asc'?1:-1;
+  return data.slice().sort(function(a,b){
+    switch(col){
+      case 0: return a.medico.localeCompare(b.medico)*dir;
+      case 1: return a.fecha.localeCompare(b.fecha)*dir;
+      case 2: return a.hora_inicio.localeCompare(b.hora_inicio)*dir;
+      case 3: return a.hora_fin.localeCompare(b.hora_fin)*dir;
+      case 4: return (a.horas_trabajadas-b.horas_trabajadas)*dir;
+      case 5: return (a.consultas-b.consultas)*dir;
+      case 6: return (a.pacientes_hora-b.pacientes_hora)*dir;
+      case 7: return ((a.cumple_meta?1:0)-(b.cumple_meta?1:0))*dir;
+      default: return 0;
+    }
+  });
+}
+
+// ============================================================
+//  EXPORT CSV
+// ============================================================
+function exportarCSV(){
+  var rows = [['Medico','Fecha','Hora Inicio','Hora Fin','Horas Trabajadas','Consultas','Pac/Hora','Cumple Meta','Telemedicina','Control','Prioritaria','Gestion']];
+  filteredData.forEach(function(d){
+    rows.push([d.medico,d.fecha,d.hora_inicio,d.hora_fin,d.horas_trabajadas,d.consultas,d.pacientes_hora,d.cumple_meta?'Si':'No',
+      d.suracup_breakdown['7000026']||0, d.suracup_breakdown['50112']||0, d.suracup_breakdown['3000056']||0, d.suracup_breakdown['8903019']||0]);
+  });
+  var csv = rows.map(function(r){return r.join(',')}).join('\n');
+  var blob = new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
+  var a = document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='RIPS_Productividad_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();
+}
+
+// ============================================================
+//  HELPERS
+// ============================================================
+function fmtFecha(d){
+  if(!d) return '';
+  var parts = d.split('-');
+  if(parts.length!==3) return d;
+  var m=['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  return parseInt(parts[2])+' '+m[parseInt(parts[1])]+' '+parts[0];
+}
+
+function shortSuracup(code){
+  var m={'7000026':'Telemed','50112':'Control','3000056':'Prioritaria','8903019':'Gestión'};
+  return m[code]||code;
+}
+
+function animNum(id, end){
+  var el=document.getElementById(id);
+  var start=parseInt(el.textContent.replace(/[^0-9]/g,''))||0;
+  var dur=500, st=performance.now();
+  function step(now){
+    var p=Math.min((now-st)/dur,1);
+    el.textContent=Math.floor(start+(end-start)*p).toLocaleString('es-CO');
+    if(p<1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+function mostrarErrorConexion(msg){
+  var row = document.getElementById('alertsRow');
+  var el = document.createElement('div');
+  el.className='chip red';
+  el.innerHTML='<span class="chip-dot"></span>⚠️ No se pudo conectar al Excel. Verifica que el archivo sea público y la URL sea correcta. ('+msg+')';
+  row.prepend(el);
+}
+
+// ============================================================
+//  DATOS DEMO (integrados del archivo original)
+// ============================================================
+function cargarDatosDemo(){
+  setSyncState('ok','Modo demo');
+  document.getElementById('lastUpdate').textContent = new Date().toLocaleString('es-CO');
+
+  // Datos del archivo original hardcodeados
+  var DEMO_DATA = [{"fecha":"2026-03-10","medico_id":"8742456","medico":"JORGE RAFAEL MOSQUERA ZARATE","consultas":21,"hora_inicio":"10:58","hora_fin":"19:30","horas_trabajadas":8.53,"pacientes_hora":2.46,"cumple_meta":false,"suracup_breakdown":{"50112":1,"7000026":20}},{"fecha":"2026-03-10","medico_id":"73133658","medico":"ALBERTO MANUEL HOYOS DIAZ","consultas":26,"hora_inicio":"07:15","hora_fin":"16:22","horas_trabajadas":9.13,"pacientes_hora":2.85,"cumple_meta":false,"suracup_breakdown":{"50112":3,"7000026":23}},{"fecha":"2026-03-10","medico_id":"1000294794","medico":"VALENTINA RAMIREZ SOTO","consultas":34,"hora_inicio":"07:30","hora_fin":"14:25","horas_trabajadas":6.92,"pacientes_hora":4.92,"cumple_meta":true,"suracup_breakdown":{"7000026":34}},{"fecha":"2026-03-10","medico_id":"1001934258","medico":"HILLARY FONSECA ARANGO","consultas":37,"hora_inicio":"07:13","hora_fin":"14:56","horas_trabajadas":7.72,"pacientes_hora":4.79,"cumple_meta":true,"suracup_breakdown":{"3000056":2,"7000026":35}},{"fecha":"2026-03-10","medico_id":"1006407149","medico":"IRIS VIVIANA GARNICA SALCEDO","consultas":53,"hora_inicio":"07:14","hora_fin":"15:18","horas_trabajadas":8.07,"pacientes_hora":6.57,"cumple_meta":true,"suracup_breakdown":{"3000056":17,"7000026":36}},{"fecha":"2026-03-10","medico_id":"1007310761","medico":"MONICA VIVIANA DIAZ MUÑOZ","consultas":57,"hora_inicio":"07:02","hora_fin":"15:43","horas_trabajadas":8.68,"pacientes_hora":6.57,"cumple_meta":true,"suracup_breakdown":{"50112":1,"3000056":16,"7000026":40}},{"fecha":"2026-03-10","medico_id":"1007397395","medico":"JHON EDISON CARVAJAL CORREA","consultas":40,"hora_inicio":"07:27","hora_fin":"21:11","horas_trabajadas":13.74,"pacientes_hora":2.91,"cumple_meta":false,"suracup_breakdown":{"3000056":11,"7000026":29}},{"fecha":"2026-03-10","medico_id":"1017164052","medico":"CAMILA ANDREA RAMIREZ GOMEZ","consultas":31,"hora_inicio":"15:58","hora_fin":"17:04","horas_trabajadas":1.09,"pacientes_hora":28.33,"cumple_meta":true,"suracup_breakdown":{"8903019":31}},{"fecha":"2026-03-10","medico_id":"1017211195","medico":"TATIANA RESTREPO HERNANDEZ","consultas":36,"hora_inicio":"07:09","hora_fin":"15:09","horas_trabajadas":8.0,"pacientes_hora":4.5,"cumple_meta":true,"suracup_breakdown":{"7000026":36}},{"fecha":"2026-03-10","medico_id":"1018493587","medico":"VIVIANA ZULEY LEAL ALVAREZ","consultas":75,"hora_inicio":"06:27","hora_fin":"13:05","horas_trabajadas":6.63,"pacientes_hora":11.31,"cumple_meta":true,"suracup_breakdown":{"50112":75}},{"fecha":"2026-03-10","medico_id":"1019082205","medico":"MIGUEL ANGEL RAMOS RAMOS","consultas":25,"hora_inicio":"08:48","hora_fin":"15:22","horas_trabajadas":6.57,"pacientes_hora":3.8,"cumple_meta":true,"suracup_breakdown":{"50112":25}},{"fecha":"2026-03-10","medico_id":"1037626163","medico":"DANIELA SIERRA MARTINEZ","consultas":41,"hora_inicio":"07:50","hora_fin":"14:30","horas_trabajadas":6.67,"pacientes_hora":6.15,"cumple_meta":true,"suracup_breakdown":{"3000056":7,"7000026":34}},{"fecha":"2026-03-10","medico_id":"1047496440","medico":"MANUEL JOSE ROMERO JIMENEZ","consultas":56,"hora_inicio":"11:02","hora_fin":"19:00","horas_trabajadas":7.96,"pacientes_hora":7.03,"cumple_meta":true,"suracup_breakdown":{"3000056":3,"7000026":53}},{"fecha":"2026-03-10","medico_id":"1047474528","medico":"DANIEL ESCOBAR ARRIETA","consultas":56,"hora_inicio":"08:28","hora_fin":"17:59","horas_trabajadas":9.52,"pacientes_hora":5.88,"cumple_meta":true,"suracup_breakdown":{"50112":1,"3000056":2,"7000026":53}},{"fecha":"2026-03-10","medico_id":"1047441453","medico":"LEISNEY CRISTINA SOTO BUELVAS","consultas":51,"hora_inicio":"07:13","hora_fin":"14:55","horas_trabajadas":7.7,"pacientes_hora":6.62,"cumple_meta":true,"suracup_breakdown":{"50112":10,"7000026":41}},{"fecha":"2026-03-10","medico_id":"1098753653","medico":"VALENTINA OLIVEROS ROA","consultas":55,"hora_inicio":"06:57","hora_fin":"15:34","horas_trabajadas":8.62,"pacientes_hora":6.38,"cumple_meta":true,"suracup_breakdown":{"50112":1,"3000056":3,"7000026":51}},{"fecha":"2026-03-10","medico_id":"1051814766","medico":"RANDY STEVEN TRUJILLO CARO","consultas":51,"hora_inicio":"07:11","hora_fin":"16:20","horas_trabajadas":9.15,"pacientes_hora":5.58,"cumple_meta":true,"suracup_breakdown":{"3000056":1,"7000026":50}},{"fecha":"2026-03-10","medico_id":"1032459779","medico":"LEONARDO ANDRÉS BUSTOS LÓPEZ","consultas":29,"hora_inicio":"07:31","hora_fin":"21:28","horas_trabajadas":13.96,"pacientes_hora":2.08,"cumple_meta":false,"suracup_breakdown":{"3000056":6,"7000026":23}},{"fecha":"2026-03-10","medico_id":"1152457859","medico":"JHON STIVEN PERAZA AVILA","consultas":28,"hora_inicio":"16:26","hora_fin":"18:47","horas_trabajadas":2.34,"pacientes_hora":11.95,"cumple_meta":true,"suracup_breakdown":{"50112":26,"8903019":2}},{"fecha":"2026-03-10","medico_id":"1037664067","medico":"FEDERICO ARENAS QUINTERO","consultas":79,"hora_inicio":"07:07","hora_fin":"19:08","horas_trabajadas":12.02,"pacientes_hora":6.57,"cumple_meta":true,"suracup_breakdown":{"50112":79}},{"fecha":"2026-03-11","medico_id":"8742456","medico":"JORGE RAFAEL MOSQUERA ZARATE","consultas":20,"hora_inicio":"10:49","hora_fin":"19:47","horas_trabajadas":8.96,"pacientes_hora":2.23,"cumple_meta":false,"suracup_breakdown":{"7000026":20}},{"fecha":"2026-03-11","medico_id":"1000294794","medico":"VALENTINA RAMIREZ SOTO","consultas":31,"hora_inicio":"07:17","hora_fin":"17:32","horas_trabajadas":10.25,"pacientes_hora":3.02,"cumple_meta":true,"suracup_breakdown":{"50112":1,"7000026":30}},{"fecha":"2026-03-11","medico_id":"1001934258","medico":"HILLARY FONSECA ARANGO","consultas":34,"hora_inicio":"07:16","hora_fin":"14:45","horas_trabajadas":7.48,"pacientes_hora":4.55,"cumple_meta":true,"suracup_breakdown":{"50112":1,"7000026":33}},{"fecha":"2026-03-11","medico_id":"1006407149","medico":"IRIS VIVIANA GARNICA SALCEDO","consultas":54,"hora_inicio":"07:08","hora_fin":"14:54","horas_trabajadas":7.77,"pacientes_hora":6.95,"cumple_meta":true,"suracup_breakdown":{"3000056":20,"7000026":34}},{"fecha":"2026-03-11","medico_id":"1007310761","medico":"MONICA VIVIANA DIAZ MUÑOZ","consultas":51,"hora_inicio":"07:06","hora_fin":"14:46","horas_trabajadas":7.67,"pacientes_hora":6.65,"cumple_meta":true,"suracup_breakdown":{"50112":1,"3000056":15,"7000026":35}},{"fecha":"2026-03-11","medico_id":"1017164052","medico":"CAMILA ANDREA RAMIREZ GOMEZ","consultas":126,"hora_inicio":"14:47","hora_fin":"18:57","horas_trabajadas":4.18,"pacientes_hora":30.16,"cumple_meta":true,"suracup_breakdown":{"8903019":126}},{"fecha":"2026-03-11","medico_id":"1017211195","medico":"TATIANA RESTREPO HERNANDEZ","consultas":36,"hora_inicio":"07:20","hora_fin":"15:20","horas_trabajadas":7.99,"pacientes_hora":4.5,"cumple_meta":true,"suracup_breakdown":{"7000026":36}},{"fecha":"2026-03-11","medico_id":"1018493587","medico":"VIVIANA ZULEY LEAL ALVAREZ","consultas":76,"hora_inicio":"06:38","hora_fin":"14:00","horas_trabajadas":7.37,"pacientes_hora":10.31,"cumple_meta":true,"suracup_breakdown":{"50112":76}},{"fecha":"2026-03-11","medico_id":"1019082205","medico":"MIGUEL ANGEL RAMOS RAMOS","consultas":51,"hora_inicio":"08:24","hora_fin":"14:48","horas_trabajadas":6.4,"pacientes_hora":7.97,"cumple_meta":true,"suracup_breakdown":{"50112":51}},{"fecha":"2026-03-11","medico_id":"1037626163","medico":"DANIELA SIERRA MARTINEZ","consultas":51,"hora_inicio":"07:49","hora_fin":"15:26","horas_trabajadas":7.62,"pacientes_hora":6.69,"cumple_meta":true,"suracup_breakdown":{"3000056":7,"7000026":44}},{"fecha":"2026-03-11","medico_id":"1047496440","medico":"MANUEL JOSE ROMERO JIMENEZ","consultas":53,"hora_inicio":"10:36","hora_fin":"19:05","horas_trabajadas":8.48,"pacientes_hora":6.25,"cumple_meta":true,"suracup_breakdown":{"7000026":53}},{"fecha":"2026-03-11","medico_id":"1032459779","medico":"LEONARDO ANDRÉS BUSTOS LÓPEZ","consultas":51,"hora_inicio":"07:36","hora_fin":"18:19","horas_trabajadas":10.72,"pacientes_hora":4.76,"cumple_meta":true,"suracup_breakdown":{"3000056":17,"7000026":34}},{"fecha":"2026-03-11","medico_id":"1051814766","medico":"RANDY STEVEN TRUJILLO CARO","consultas":51,"hora_inicio":"07:11","hora_fin":"16:04","horas_trabajadas":8.88,"pacientes_hora":5.75,"cumple_meta":true,"suracup_breakdown":{"50112":1,"7000026":50}},{"fecha":"2026-03-11","medico_id":"1047474528","medico":"DANIEL ESCOBAR ARRIETA","consultas":35,"hora_inicio":"08:31","hora_fin":"16:19","horas_trabajadas":7.8,"pacientes_hora":4.49,"cumple_meta":true,"suracup_breakdown":{"50112":1,"7000026":34}},{"fecha":"2026-03-11","medico_id":"1098753653","medico":"VALENTINA OLIVEROS ROA","consultas":49,"hora_inicio":"07:00","hora_fin":"14:57","horas_trabajadas":7.95,"pacientes_hora":6.17,"cumple_meta":true,"suracup_breakdown":{"3000056":3,"7000026":46}},{"fecha":"2026-03-11","medico_id":"1152457859","medico":"JHON STIVEN PERAZA AVILA","consultas":21,"hora_inicio":"14:27","hora_fin":"17:10","horas_trabajadas":2.72,"pacientes_hora":7.73,"cumple_meta":true,"suracup_breakdown":{"50112":21}},{"fecha":"2026-03-11","medico_id":"1037664067","medico":"FEDERICO ARENAS QUINTERO","consultas":55,"hora_inicio":"07:22","hora_fin":"18:16","horas_trabajadas":10.89,"pacientes_hora":5.05,"cumple_meta":true,"suracup_breakdown":{"50112":55}}];
+
+  allData = DEMO_DATA;
+  var fechas = [...new Set(DEMO_DATA.map(function(d){return d.fecha}))].sort();
+  document.getElementById('topbarPeriodo').textContent = fmtFecha(fechas[0]) + ' – ' + fmtFecha(fechas[fechas.length-1]);
+  poblarFiltros(DEMO_DATA, fechas);
+  aplicarFiltros();
+}
+</script>
+</body>
+</html>
